@@ -1,2 +1,2 @@
-# HTML-Chronometer
-HTML Chronometer
+# HTML-Stopwatch
+HTML Stopwatch
