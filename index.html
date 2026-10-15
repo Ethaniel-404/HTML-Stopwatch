@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cronómetro</title>
+<style>
+/* Sin variables CSS, grid, gap, clamp() ni fuentes externas: pensado para WebView de Android 7 */
+html,body{margin:0;padding:0;height:100%}
+body{background:#101828;color:#fff;font-family:Roboto,"Droid Sans",Arial,sans-serif;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;overflow-x:hidden}
+.wrap{min-height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center;padding:12px;box-sizing:border-box}
+#card{position:relative;width:100%;max-width:900px;background:#1b2740;border:3px solid #fff;border-radius:20px;padding:20px;box-sizing:border-box}
+#card.beep{background:#ffd23f;color:#101828}
+.display{font-family:"Droid Sans Mono","Roboto Mono",monospace;font-weight:700;font-size:21vw;line-height:1.1;text-align:center;cursor:pointer;white-space:nowrap;-ms-touch-action:manipulation;touch-action:manipulation}
+.display small{font-size:.35em;font-weight:400;opacity:.75}
+.status{text-align:center;font-size:18px;min-height:26px;margin:4px 0 18px;opacity:.8}
+.row{display:-webkit-flex;display:flex}
+.row button{-webkit-flex:1;flex:1}
+.row button+button{margin-left:10px}
+.row button.big{-webkit-flex:2;flex:2}
+button{font:inherit;font-weight:700;font-size:22px;min-height:64px;padding:8px 10px;border-radius:14px;border:3px solid #fff;background:transparent;color:inherit;cursor:pointer;-ms-touch-action:manipulation;touch-action:manipulation}
+button.primary{background:#4f7bff;border-color:#4f7bff;color:#fff}
+button:disabled{opacity:.3}
+#card.beep button{border-color:#101828}
+.interval{display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center;-webkit-flex-wrap:wrap;flex-wrap:wrap;margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,255,255,.3);font-size:20px}
+.interval>*{margin:4px 6px}
+.interval input{width:120px;font-family:inherit;font-weight:700;font-size:26px;text-align:center;padding:8px 4px;border:3px solid #fff;border-radius:12px;background:#101828;color:#fff;-webkit-user-select:text;user-select:text;-moz-appearance:textfield;-webkit-appearance:none;appearance:textfield;box-sizing:content-box}
+.interval input::-webkit-inner-spin-button,.interval input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.hint{width:100%;text-align:center;font-size:15px;opacity:.75;margin:6px 0 0}
+.lang{position:absolute;top:8px;right:8px;z-index:5;display:-webkit-flex;display:flex}
+.lang button{min-height:30px;min-width:46px;padding:2px 8px;font-size:13px;border-width:2px;border-radius:8px;margin-left:6px}
+.lang button.on{background:#fff;color:#101828}
+@media (min-width:700px){.display{font-size:150px}.status{font-size:22px}}
+@media (orientation:landscape) and (max-height:700px){.display{font-size:28vh}#card{padding:12px 20px}.status{margin-bottom:10px}.interval{margin-top:12px;padding-top:10px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="card">
+<div class="lang"><button id="lES" title="Español">ESP</button><button id="lEN" title="English">ENG</button></div>
+  <div class="display" id="display" title="Toca para iniciar/pausar"><span id="mm">00:00</span><small id="ds">.0</small></div>
+  <p class="status" id="status">Listo. Toca los números, Iniciar o la barra espaciadora.</p>
+  <div class="row">
+    <button class="primary big" id="start">Iniciar</button>
+    <button id="pause" disabled>Pausar</button>
+    <button id="reset">Reiniciar</button>
+  </div>
+  <div class="interval">
+    <span id="lblEvery">Emitir sonido cada</span>
+    <input id="every" type="number" min="0" max="5999" step="1" value="10">
+    <span id="lblSec">segundos</span>
+    <p class="hint" id="hint">Señal horaria: cinco beeps cortos y uno largo en la marca. 0 = sin sonido. Límite: 99:59.</p>
+  </div>
+</div>
+</div>
+<script>
+(function(){
+  var MAX_MS=(99*60+59)*1000, STORE='crono_every';
+  var $=function(id){return document.getElementById(id);};
+  var card=$('card'), disp=$('display'), mm=$('mm'), ds=$('ds'), statusEl=$('status');
+  var bStart=$('start'), bPause=$('pause'), bReset=$('reset'), everyEl=$('every');
+  var running=false, elapsed=0, startedAt=0, timer=null, lastBeepSec=0, ctx=null, wl=null;
+  var lastT='', lastD='';
+
+  /* Idiomas */
+  var T={
+    es:{title:'Cronómetro',start:'Iniciar',resume:'Continuar',pause:'Pausar',reset:'Reiniciar',every:'Emitir sonido cada',sec:'segundos',
+        hint:'Señal horaria: cinco beeps cortos y uno largo en la marca. 0 = sin sonido. Límite: 99:59.',
+        ready:'Listo. Toca los números, Iniciar o la barra espaciadora.',running:'En marcha',paused:'En pausa',limit:'Límite alcanzado (99:59)',tip:'Toca para iniciar/pausar'},
+    en:{title:'Stopwatch',start:'Start',resume:'Resume',pause:'Pause',reset:'Reset',every:'Beep every',sec:'seconds',
+        hint:'Time signal: five short beeps and one long beep at the mark. 0 = no sound. Limit: 99:59.',
+        ready:'Ready. Tap the numbers, Start, or press the space bar.',running:'Running',paused:'Paused',limit:'Limit reached (99:59)',tip:'Tap to start/pause'}
+  };
+  var LANG='es', stKey='ready', startKey='start';
+  function setStatus(k){stKey=k;statusEl.textContent=T[LANG][k];}
+  function setStartLabel(k){startKey=k;bStart.textContent=T[LANG][k];}
+  function applyLang(l){
+    if(!T[l]) l='es';
+    LANG=l; var t=T[l];
+    document.documentElement.lang=l; document.title=t.title;
+    setStartLabel(startKey); setStatus(stKey);
+    bPause.textContent=t.pause; bReset.textContent=t.reset;
+    $('lblEvery').textContent=t.every; $('lblSec').textContent=t.sec; $('hint').textContent=t.hint;
+    disp.title=t.tip;
+    $('lES').className=(l==='es')?'on':''; $('lEN').className=(l==='en')?'on':'';
+    try{localStorage.setItem('crono_lang',l);}catch(e){}
+  }
+
+  function pad(n){return n<10?'0'+n:''+n;}
+  function render(ms){
+    var s=Math.floor(ms/1000);
+    var t=pad(Math.floor(s/60))+':'+pad(s%60);
+    var d='.'+Math.floor((ms%1000)/100);
+    if(t!==lastT){mm.textContent=t;lastT=t;}
+    if(d!==lastD){ds.textContent=d;lastD=d;}
+  }
+  function total(){return elapsed+(running?Date.now()-startedAt:0);}
+
+  /* Audio */
+  function audio(){
+    try{
+      if(!ctx){var AC=window.AudioContext||window.webkitAudioContext; if(AC) ctx=new AC();}
+      if(ctx && ctx.state==='suspended' && ctx.resume) ctx.resume();
+    }catch(e){}
+  }
+  /* Tono de relleno casi inaudible: evita que la salida de audio entre en reposo entre beeps */
+  var KEEP_FREQ=40, KEEP_GAIN=0.003, keep=null;
+  function keepOn(){
+    if(!ctx||keep) return;
+    try{
+      var o=ctx.createOscillator(), g=ctx.createGain();
+      o.type='sine'; o.frequency.value=KEEP_FREQ; g.gain.value=KEEP_GAIN;
+      o.connect(g); g.connect(ctx.destination); o.start(0);
+      keep={o:o,g:g};
+    }catch(e){}
+  }
+  function keepOff(){
+    if(!keep) return;
+    try{ keep.o.stop(0); keep.o.disconnect(); keep.g.disconnect(); }catch(e){}
+    keep=null;
+  }
+  function beep(long){
+    var dur=long?0.5:0.1;
+    if(ctx){
+      try{
+        var o=ctx.createOscillator(), g=ctx.createGain(), t=ctx.currentTime;
+        o.type='sine'; o.frequency.value=1000;
+        g.gain.setValueAtTime(0.0001,t);
+        g.gain.exponentialRampToValueAtTime(0.6,t+0.005);
+        g.gain.setValueAtTime(0.6,t+dur-0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t); o.stop(t+dur+0.02);
+      }catch(e){}
+    }
+    card.className='beep';
+    setTimeout(function(){card.className='';},dur*1000+30);
+  }
+
+  /* Mantener pantalla encendida (solo donde exista Wake Lock; si no, usar "pantalla: nunca se apaga") */
+  function lockScreen(){
+    try{ if(navigator.wakeLock && navigator.wakeLock.request){
+      navigator.wakeLock.request('screen').then(function(l){wl=l;},function(){});
+    } }catch(e){}
+  }
+  function unlockScreen(){ try{ if(wl){wl.release();wl=null;} }catch(e){} }
+  document.addEventListener('visibilitychange',function(){
+    if(!document.hidden && running) lockScreen();
+  });
+
+  /* Intervalo */
+  function interval(){
+    var v=parseInt(everyEl.value,10);
+    return (isNaN(v)||v<0)?0:v;
+  }
+  function setEvery(v){
+    v=parseInt(v,10); if(isNaN(v)||v<0) v=0; if(v>5999) v=5999;
+    everyEl.value=v;
+    try{localStorage.setItem(STORE,String(v));}catch(e){}
+    lastBeepSec=Math.floor(total()/1000);
+  }
+  try{ var saved=localStorage.getItem(STORE); if(saved!==null) everyEl.value=saved; }catch(e){}
+
+  /* Cronómetro */
+  function tick(){
+    var now=total();
+    if(now>=MAX_MS){ now=MAX_MS; render(now); pause(true); return; }
+    render(now);
+    var sec=Math.floor(now/1000), n=interval();
+    if(n>0 && sec>0 && sec!==lastBeepSec){
+      lastBeepSec=sec;
+      var rem=(n-(sec%n))%n;
+      if(rem===0) beep(true);
+      else if(rem<=5) beep(false);
+    }
+  }
+  function start(){
+    if(running || elapsed>=MAX_MS) return;
+    audio(); keepOn(); lockScreen();
+    running=true; startedAt=Date.now();
+    timer=setInterval(tick,40);
+    bStart.disabled=true; bPause.disabled=false;
+    setStatus('running');
+  }
+  function pause(finished){
+    if(!running) return;
+    elapsed+=Date.now()-startedAt;
+    running=false; clearInterval(timer); unlockScreen(); keepOff();
+    bStart.disabled=(finished===true); bPause.disabled=true;
+    setStartLabel('resume');
+    setStatus(finished===true?'limit':'paused');
+  }
+  function reset(){
+    running=false; clearInterval(timer); unlockScreen(); keepOff();
+    elapsed=0; lastBeepSec=0; render(0);
+    bStart.disabled=false; bPause.disabled=true;
+    setStartLabel('start'); setStatus('ready');
+  }
+  function toggle(){ if(running) pause(); else start(); }
+
+  bStart.addEventListener('click',start);
+  bPause.addEventListener('click',function(){pause();});
+  bReset.addEventListener('click',reset);
+  disp.addEventListener('click',toggle);
+  everyEl.addEventListener('change',function(){setEvery(everyEl.value);});
+  everyEl.addEventListener('focus',function(){try{everyEl.select();}catch(e){}});
+
+  $('lES').addEventListener('click',function(){applyLang('es');});
+  $('lEN').addEventListener('click',function(){applyLang('en');});
+  var savedLang='es';
+  try{ savedLang=localStorage.getItem('crono_lang')||'es'; }catch(e){}
+  applyLang(savedLang);
+
+  function isSpace(e){return e.keyCode===32||e.key===' '||e.code==='Space';}
+  document.addEventListener('keydown',function(e){
+    if(!isSpace(e)||e.target===everyEl) return;
+    e.preventDefault();
+    if(!e.repeat) toggle();
+  });
+  document.addEventListener('keyup',function(e){
+    if(isSpace(e)&&e.target!==everyEl) e.preventDefault();
+  });
+})();
+</script>
+</body>
+</html>
